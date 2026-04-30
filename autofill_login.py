@@ -1,11 +1,15 @@
 import argparse
+import csv
 import getpass
 import re
 import sys
+import time
+from datetime import datetime
 from pathlib import Path
 
 
 DEFAULT_URL = "https://juzixiaoguofan.replit.app/admin-panel/activate"
+API_KEY_PATTERN = re.compile(r"sk-jb-[A-Za-z0-9_-]{24,}")
 
 
 def import_playwright():
@@ -81,6 +85,73 @@ def click_submit(page, timeout_ms=2500):
             continue
 
     raise RuntimeError("Could not find a submit button.")
+
+
+def page_text(page):
+    return page.locator("body").inner_text(timeout=5000)
+
+
+def extract_api_keys(text):
+    return set(API_KEY_PATTERN.findall(text))
+
+
+def find_activation_result(text, previous_keys):
+    lines = text.splitlines()
+
+    for line_index, line in enumerate(lines):
+        if "您的密钥" not in line:
+            continue
+
+        new_keys = [key for key in API_KEY_PATTERN.findall(line) if key not in previous_keys]
+        if not new_keys:
+            continue
+
+        nearby_start = max(0, line_index - 8)
+        nearby_text = "\n".join(lines[nearby_start : line_index + 1])
+        if "账号权益处理中" in nearby_text:
+            return new_keys[-1], nearby_text
+
+    return None, None
+
+
+def wait_for_activation_result(page, previous_keys, timeout_seconds, poll_interval):
+    deadline = time.monotonic() + timeout_seconds
+    last_error = None
+
+    while time.monotonic() < deadline:
+        try:
+            text = page_text(page)
+            key, log_excerpt = find_activation_result(text, previous_keys)
+            if key:
+                return key, log_excerpt
+        except Exception as exc:
+            last_error = exc
+
+        time.sleep(poll_interval)
+
+    message = "Timed out waiting for activation log and new API key."
+    if last_error:
+        message += f" Last error: {last_error}"
+    raise RuntimeError(message)
+
+
+def append_activation_key(keys_file, account, api_key, page_url):
+    output_path = Path(keys_file)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    needs_header = not output_path.exists() or output_path.stat().st_size == 0
+
+    with output_path.open("a", newline="", encoding="utf-8") as handle:
+        writer = csv.writer(handle)
+        if needs_header:
+            writer.writerow(["time", "account", "api_key", "url"])
+        writer.writerow(
+            [
+                datetime.now().isoformat(timespec="seconds"),
+                account,
+                api_key,
+                page_url,
+            ]
+        )
 
 
 def parse_credential_pair(text):
@@ -183,6 +254,28 @@ def main():
         help="Click the submit/activate/login button after filling.",
     )
     parser.add_argument(
+        "--auto-activate",
+        action="store_true",
+        help="Click submit, wait for the activation log and new API key, save it, then continue automatically.",
+    )
+    parser.add_argument(
+        "--keys-file",
+        default="activation_keys.csv",
+        help="CSV file used by --auto-activate to save API keys.",
+    )
+    parser.add_argument(
+        "--activation-timeout",
+        type=int,
+        default=2100,
+        help="Seconds to wait for each activation result in --auto-activate mode.",
+    )
+    parser.add_argument(
+        "--poll-interval",
+        type=float,
+        default=2.0,
+        help="Seconds between page checks in --auto-activate mode.",
+    )
+    parser.add_argument(
         "--profile-dir",
         default=str(Path.home() / ".autofill_login_profile"),
         help="Persistent browser profile directory. Useful when the page needs you to stay logged in.",
@@ -225,12 +318,27 @@ def main():
                 input("Then go back to the target page and press Enter here to retry...")
                 fill_form(page, account, password)
 
-            if args.submit:
+            if args.auto_activate:
+                previous_keys = extract_api_keys(page_text(page))
+                click_submit(page)
+                print("Waiting for activation log and new API key...")
+                api_key, log_excerpt = wait_for_activation_result(
+                    page,
+                    previous_keys,
+                    args.activation_timeout,
+                    args.poll_interval,
+                )
+                append_activation_key(args.keys_file, account, api_key, page.url)
+                print(f"Recorded API key for {account} in {args.keys_file}.")
+                if log_excerpt:
+                    print("Matched activation log:")
+                    print(log_excerpt)
+            elif args.submit:
                 click_submit(page)
             else:
                 print("Filled only. Check the page, then click the button manually if needed.")
 
-            if index < total:
+            if index < total and not args.auto_activate:
                 wait_for_key(
                     "After this account is done and the page is ready, press Enter here to fill the next one..."
                 )
