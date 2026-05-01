@@ -14,4 +14,6 @@ accounts.txt
 accounts.csv
 activation_keys.csv
 api_keys.csv
+activation_keys.txt
+api_keys.txt
 *.log

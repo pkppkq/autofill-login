@@ -83,10 +83,10 @@ py -3 .\autofill_login.py --auto-activate
 2. 自动点击“开始激活”。
 3. 等待操作日志出现“账号权益处理中”和“您的密钥”。
 4. 提取新出现的 `sk-jb-...` 密钥。
-5. 写入本地 `activation_keys.csv`。
+5. 写入脚本同目录下的 `activation_keys.csv` 和 `activation_keys.txt`。
 6. 自动继续下一个账号。
 
-`activation_keys.csv` 已经加入 `.gitignore`，不会默认提交到 GitHub。
+`activation_keys.csv` 和 `activation_keys.txt` 已经加入 `.gitignore`，不会默认提交到 GitHub。
 
 ## 常用参数
 
@@ -97,6 +97,8 @@ py -3 .\autofill_login.py --auto-activate
 --submit                  填写后自动点击提交、登录或激活按钮。
 --auto-activate           自动点击、等待激活日志、记录密钥并继续下一个账号。
 --keys-file FILE          自动激活模式下保存密钥的 CSV 文件，默认 activation_keys.csv。
+--keys-text-file FILE     自动激活模式下保存密钥的 TXT 文档，默认 activation_keys.txt。
+--no-keys-text            不生成额外的 TXT 文档，只保存 CSV。
 --activation-timeout SEC  每个账号等待激活日志和密钥的最长秒数，默认 2100。
 --poll-interval SEC       自动激活模式下检查页面的间隔秒数，默认 2。
 --no-start-wait           打开页面后不等待 Enter，直接开始填写。
@@ -120,7 +122,7 @@ py -3 .\autofill_login.py --browser chromium
 ## 安全提醒
 
 - 不要把真实账号密码提交到 GitHub。
-- 不要把 `activation_keys.csv` 或其他密钥文件提交到 GitHub。
+- 不要把 `activation_keys.csv`、`activation_keys.txt` 或其他密钥文件提交到 GitHub。
 - 建议只把账号密码粘贴到本地 PowerShell 提示符里。
 - 不建议使用 `--password` 参数传密码，因为命令历史可能会保存它。
 - 如果账号密码曾经出现在聊天记录、截图、日志或提交记录中，建议尽快修改密码或作废重建。

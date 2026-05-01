@@ -9,6 +9,7 @@ from pathlib import Path
 
 
 DEFAULT_URL = "https://juzixiaoguofan.replit.app/admin-panel/activate"
+SCRIPT_DIR = Path(__file__).resolve().parent
 API_KEY_PATTERN = re.compile(r"sk-jb-[A-Za-z0-9_-]{24,}")
 
 
@@ -135,8 +136,17 @@ def wait_for_activation_result(page, previous_keys, timeout_seconds, poll_interv
     raise RuntimeError(message)
 
 
-def append_activation_key(keys_file, account, api_key, page_url):
-    output_path = Path(keys_file)
+def resolve_output_path(file_path):
+    output_path = Path(file_path)
+    if not output_path.is_absolute():
+        output_path = SCRIPT_DIR / output_path
+    return output_path
+
+
+def append_activation_key(keys_file, keys_text_file, account, api_key, page_url):
+    saved_at = datetime.now().isoformat(timespec="seconds")
+
+    output_path = resolve_output_path(keys_file)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     needs_header = not output_path.exists() or output_path.stat().st_size == 0
 
@@ -144,14 +154,18 @@ def append_activation_key(keys_file, account, api_key, page_url):
         writer = csv.writer(handle)
         if needs_header:
             writer.writerow(["time", "account", "api_key", "url"])
-        writer.writerow(
-            [
-                datetime.now().isoformat(timespec="seconds"),
-                account,
-                api_key,
-                page_url,
-            ]
-        )
+        writer.writerow([saved_at, account, api_key, page_url])
+
+    text_path = None
+    if keys_text_file:
+        text_path = resolve_output_path(keys_text_file)
+        text_path.parent.mkdir(parents=True, exist_ok=True)
+        with text_path.open("a", encoding="utf-8") as handle:
+            handle.write(f"[{saved_at}] {account}\n")
+            handle.write(f"{api_key}\n")
+            handle.write(f"{page_url}\n\n")
+
+    return output_path, text_path
 
 
 def open_target_page(context, url, keep_extra_tabs):
@@ -279,7 +293,17 @@ def main():
     parser.add_argument(
         "--keys-file",
         default="activation_keys.csv",
-        help="CSV file used by --auto-activate to save API keys.",
+        help="CSV file used by --auto-activate to save API keys. Relative paths are saved next to this script.",
+    )
+    parser.add_argument(
+        "--keys-text-file",
+        default="activation_keys.txt",
+        help="Text file used by --auto-activate to save API keys. Relative paths are saved next to this script.",
+    )
+    parser.add_argument(
+        "--no-keys-text",
+        action="store_true",
+        help="Do not write the extra text file in --auto-activate mode.",
     )
     parser.add_argument(
         "--activation-timeout",
@@ -359,8 +383,17 @@ def main():
                     args.activation_timeout,
                     args.poll_interval,
                 )
-                append_activation_key(args.keys_file, account, api_key, page.url)
-                print(f"Recorded API key for {account} in {args.keys_file}.")
+                csv_path, text_path = append_activation_key(
+                    args.keys_file,
+                    None if args.no_keys_text else args.keys_text_file,
+                    account,
+                    api_key,
+                    page.url,
+                )
+                print(f"Recorded API key for {account}.")
+                print(f"CSV: {csv_path}")
+                if text_path:
+                    print(f"Text: {text_path}")
                 if log_excerpt:
                     print("Matched activation log:")
                     print(log_excerpt)
