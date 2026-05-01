@@ -18,4 +18,6 @@ activation_keys.txt
 api_keys.txt
 donation_progress.json
 donation_results.csv
+usage_results.txt
+usage_results.csv
 *.log

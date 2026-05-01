@@ -14,6 +14,7 @@
 - 可选：自动点击“开始激活”，等待操作日志出现密钥信息，保存密钥后自动继续下一个账号。
 - 可选：在“我的背包”页面批量把 `activation_keys.txt` 里的密钥加入成员列表。
 - 可选：在“橘子机”页面批量捐献 `activation_keys.txt` 里的密钥，并记录进度。
+- 可选：在“用量查询”页面批量查询 Key 容量和已使用次数，并写入结果文件。
 - 使用持久化浏览器配置，方便复用已经登录的会话。
 
 ## 环境要求
@@ -203,6 +204,52 @@ py -3 .\autofill_login.py --donate-keys --donation-start-index 20
 
 默认情况下，打开橘子机页面后一定会等待你按 Enter 才开始捐献。只有显式加 `--no-start-wait` 时，才会打开页面后直接开始操作。
 
+## 批量查询用量
+
+如果要批量查询保存 Key 的容量和已使用次数，使用：
+
+```powershell
+py -3 .\autofill_login.py --query-usage
+```
+
+这个模式会：
+
+1. 打开 `https://juzixiaoguofan.replit.app/admin-panel/my-key`。
+2. 暂停等待，你先在浏览器里登录并确认页面可用。
+3. 你回到 PowerShell 按 Enter 后，脚本才开始操作页面。
+4. 从 `activation_keys.txt` 提取所有 `sk-jb-...`。
+5. 逐个填入“输入您的 API 密钥”。
+6. 点击“查询”。
+7. 如果显示 `已使用 0 / 25 次` 这类结果，会记录已用次数、总容量、剩余次数和消耗百分比。
+8. 如果显示“密钥不存在或无效”，也会写入结果文件并继续下一个。
+9. 如果等待超时或页面报错，会记录错误原因并自动跳过下一个。
+
+查询时，PowerShell 可以直接按：
+
+- `Q`：退出脚本。
+- `S`：跳过当前 Key。
+
+这些按键在等待查询结果时也生效，不需要再按 Enter。
+
+查询结果会写入：
+
+```text
+H:\github\autofill-login\usage_results.txt
+H:\github\autofill-login\usage_results.csv
+```
+
+`usage_results.txt` 适合直接打开查看；`usage_results.csv` 适合用 Excel、WPS 或脚本继续处理。
+
+这两个用量结果文件会包含完整 Key，已经加入 `.gitignore`，不要手动提交到 GitHub。
+
+默认读取脚本同目录下的 `activation_keys.txt`。也可以指定其他文件：
+
+```powershell
+py -3 .\autofill_login.py --query-usage --usage-keys-file "H:\path\keys.txt"
+```
+
+默认情况下，打开用量查询页面后一定会等待你按 Enter 才开始查询。只有显式加 `--no-start-wait` 时，才会打开页面后直接开始操作。
+
 ## 密钥保存位置
 
 自动激活模式拿到密钥后，会自动新建并追加写入下面两个本地文件：
@@ -238,6 +285,13 @@ time,account,api_key,url
 --auto-activate           自动点击、等待激活日志、记录密钥并继续下一个账号。
 --add-member-keys         打开背包页，批量把密钥添加为成员 Key。
 --donate-keys             打开橘子机页，批量捐献保存的 Key。
+--query-usage             打开用量查询页，批量查询 Key 容量和已使用次数。
+--usage-url URL           批量用量查询模式使用的页面地址。
+--usage-keys-file FILE    批量用量查询模式读取的密钥文件，默认 activation_keys.txt。
+--usage-results-file FILE 用量查询 TXT 结果文件，默认 usage_results.txt。
+--usage-csv-file FILE     用量查询 CSV 结果文件，默认 usage_results.csv。
+--usage-timeout SEC       每个 Key 等待查询结果的秒数，默认 15。
+--usage-delay SEC         点击查询后开始读取结果前的暂停秒数，默认 0.8。
 --donation-url URL        批量捐献模式使用的橘子机页面地址。
 --donation-keys-file FILE 批量捐献模式读取的密钥文件，默认 activation_keys.txt。
 --donation-state-file FILE 捐献进度 JSON 文件，默认 donation_progress.json。
@@ -278,7 +332,7 @@ py -3 .\autofill_login.py --browser chromium
 ## 安全提醒
 
 - 不要把真实账号密码提交到 GitHub。
-- 不要把 `activation_keys.csv`、`activation_keys.txt`、`donation_progress.json`、`donation_results.csv` 或其他密钥文件提交到 GitHub。
+- 不要把 `activation_keys.csv`、`activation_keys.txt`、`donation_progress.json`、`donation_results.csv`、`usage_results.txt`、`usage_results.csv` 或其他密钥文件提交到 GitHub。
 - 建议只把账号密码粘贴到本地 PowerShell 提示符里。
 - 不建议使用 `--password` 参数传密码，因为命令历史可能会保存它。
 - 如果账号密码曾经出现在聊天记录、截图、日志或提交记录中，建议尽快修改密码或作废重建。

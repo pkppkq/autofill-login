@@ -13,6 +13,7 @@ from pathlib import Path
 DEFAULT_URL = "https://juzixiaoguofan.replit.app/admin-panel/activate"
 DEFAULT_BACKPACK_URL = "https://juzixiaoguofan.replit.app/admin-panel/backpack"
 DEFAULT_DONATION_URL = "https://juzixiaoguofan.replit.app/admin-panel/lottery"
+DEFAULT_USAGE_URL = "https://juzixiaoguofan.replit.app/admin-panel/my-key"
 SCRIPT_DIR = Path(__file__).resolve().parent
 API_KEY_PATTERN = re.compile(r"sk-jb-[A-Za-z0-9_-]{24,}")
 
@@ -793,6 +794,225 @@ def donate_keys(page, api_keys, keys_path, args):
         print(f"Progress: {progress_path}")
 
 
+def find_usage_input(page, timeout_ms=2500):
+    candidates = [
+        lambda: page.get_by_placeholder(re.compile(r"(输入您的 API 密钥|API 密钥|API key|key)", re.I)),
+        lambda: page.locator("input[placeholder*='API' i]"),
+        lambda: page.locator("input[placeholder*='key' i]"),
+        lambda: page.locator("input").last,
+    ]
+
+    last_error = None
+    for candidate in candidates:
+        try:
+            locator = candidate()
+            element = first_visible(locator)
+            if element is None:
+                continue
+            element.wait_for(state="visible", timeout=timeout_ms)
+            return element
+        except Exception as exc:
+            last_error = exc
+
+    message = "Could not find the usage query input."
+    if last_error:
+        message += f" Last error: {last_error}"
+    raise RuntimeError(message)
+
+
+def click_usage_query_button(page, timeout_ms=2500):
+    query_text = re.compile(r"(查询|search|query)", re.I)
+    candidates = [
+        lambda: page.get_by_role("button", name=query_text),
+        lambda: page.locator("button").filter(has_text=query_text),
+        lambda: page.get_by_text(query_text),
+    ]
+
+    for candidate in candidates:
+        try:
+            element = first_visible(candidate())
+            if element is None:
+                continue
+            element.click(timeout=timeout_ms)
+            return True
+        except Exception:
+            continue
+
+    raise RuntimeError("Could not find the usage query button.")
+
+
+def parse_usage_result(text):
+    if "密钥不存在或无效" in text:
+        return {
+            "status": "invalid",
+            "used": "",
+            "capacity": "",
+            "remaining": "",
+            "percent": "",
+            "detail": "密钥不存在或无效",
+        }
+
+    usage_match = re.search(r"(\d+)\s*/\s*(\d+)(?:\s*次)?", text)
+    if not usage_match:
+        return None
+
+    used = int(usage_match.group(1))
+    capacity = int(usage_match.group(2))
+    percent_match = re.search(r"(\d+(?:\.\d+)?)\s*%(?:\s*已消耗)?", text)
+    percent = percent_match.group(1) if percent_match else ""
+
+    return {
+        "status": "valid",
+        "used": used,
+        "capacity": capacity,
+        "remaining": max(capacity - used, 0),
+        "percent": percent,
+        "detail": f"已使用 {used} / {capacity} 次",
+    }
+
+
+def wait_for_usage_result(page, timeout_seconds, previous_text=None):
+    deadline = time.monotonic() + timeout_seconds
+    started_at = time.monotonic()
+
+    while time.monotonic() < deadline:
+        command = read_wait_command()
+        if command == "quit":
+            raise ActivationWaitCancelled("User requested exit while waiting for usage result.")
+        if command == "skip":
+            raise ActivationWaitSkipped("User requested skipping the current usage key.")
+
+        text = page_text(page)
+        result = parse_usage_result(text)
+        if result:
+            if previous_text is not None and text == previous_text and time.monotonic() - started_at < 3:
+                time.sleep(0.5)
+                continue
+            return result
+
+        time.sleep(0.5)
+
+    raise RuntimeError("Timed out waiting for usage query result.")
+
+
+def append_usage_result(args, index, total_keys, api_key, result):
+    saved_at = datetime.now().isoformat(timespec="seconds")
+    key_masked = mask_api_key(api_key)
+    key_hash = key_fingerprint(api_key)
+    text_path = resolve_output_path(args.usage_results_file)
+    text_path.parent.mkdir(parents=True, exist_ok=True)
+
+    with text_path.open("a", encoding="utf-8") as handle:
+        handle.write(f"[{saved_at}] key {index + 1}/{total_keys}\n")
+        handle.write(f"key: {api_key}\n")
+        handle.write(f"key_masked: {key_masked}\n")
+        handle.write(f"key_hash: {key_hash}\n")
+        handle.write(f"status: {result['status']}\n")
+        handle.write(f"used: {result['used']}\n")
+        handle.write(f"capacity: {result['capacity']}\n")
+        handle.write(f"remaining: {result['remaining']}\n")
+        handle.write(f"percent_consumed: {result['percent']}\n")
+        handle.write(f"detail: {result['detail']}\n\n")
+
+    csv_path = append_csv_row(
+        args.usage_csv_file,
+        [
+            "time",
+            "key_number",
+            "total_keys",
+            "key",
+            "key_masked",
+            "key_hash",
+            "status",
+            "used",
+            "capacity",
+            "remaining",
+            "percent_consumed",
+            "detail",
+        ],
+        [
+            saved_at,
+            index + 1,
+            total_keys,
+            api_key,
+            key_masked,
+            key_hash,
+            result["status"],
+            result["used"],
+            result["capacity"],
+            result["remaining"],
+            result["percent"],
+            result["detail"],
+        ],
+    )
+
+    return text_path, csv_path
+
+
+def query_key_usage(page, api_keys, keys_path, args):
+    total = len(api_keys)
+    input_box = find_usage_input(page, timeout_ms=5000)
+
+    print(f"Loaded {total} usage query key(s) from: {keys_path}")
+    print("During usage query: press Q to quit, or S to skip the current key.")
+
+    for index, api_key in enumerate(api_keys):
+        command = read_wait_command()
+        if command == "quit":
+            print("User requested exit before querying the next key.")
+            break
+        if command == "skip":
+            print("Skipped one pending key.")
+            continue
+
+        marker = mask_api_key(api_key)
+        print(f"\nQuerying key {index + 1}/{total}: {marker}")
+
+        try:
+            previous_text = page_text(page)
+            input_box.fill(api_key)
+            click_usage_query_button(page)
+            time.sleep(args.usage_delay)
+            result = wait_for_usage_result(page, args.usage_timeout, previous_text)
+            text_path, csv_path = append_usage_result(args, index, total, api_key, result)
+            if result["status"] == "valid":
+                print(
+                    f"Usage: {marker} used {result['used']} / {result['capacity']}, remaining {result['remaining']}."
+                )
+            else:
+                print(f"Usage query result: {marker} {result['detail']}.")
+            print(f"Text: {text_path}")
+            print(f"CSV: {csv_path}")
+            input_box = find_usage_input(page, timeout_ms=2000)
+            input_box.fill("")
+        except ActivationWaitSkipped as exc:
+            print(f"{exc} Moving to the next key.")
+        except ActivationWaitCancelled as exc:
+            print(exc)
+            break
+        except Exception as exc:
+            result = {
+                "status": "error",
+                "used": "",
+                "capacity": "",
+                "remaining": "",
+                "percent": "",
+                "detail": str(exc),
+            }
+            text_path, csv_path = append_usage_result(args, index, total, api_key, result)
+            print(f"Usage query failed: {marker}. Reason: {exc}")
+            print("Skipping this key and moving to the next one.")
+            print(f"Text: {text_path}")
+            print(f"CSV: {csv_path}")
+            try:
+                input_box = find_usage_input(page, timeout_ms=1000)
+                input_box.fill("")
+            except Exception:
+                pass
+
+    print("Usage query mode finished.")
+
+
 def open_target_page(context, url, keep_extra_tabs):
     page = context.pages[0] if context.pages else context.new_page()
     page.goto(url, wait_until="domcontentloaded")
@@ -926,6 +1146,43 @@ def main():
         help="Open the lottery page and donate stored API keys.",
     )
     parser.add_argument(
+        "--query-usage",
+        action="store_true",
+        help="Open the usage page and query stored API key capacity/usage.",
+    )
+    parser.add_argument(
+        "--usage-url",
+        default=DEFAULT_USAGE_URL,
+        help="Usage query page URL used by --query-usage.",
+    )
+    parser.add_argument(
+        "--usage-keys-file",
+        default="activation_keys.txt",
+        help="File containing sk-jb API keys for --query-usage.",
+    )
+    parser.add_argument(
+        "--usage-results-file",
+        default="usage_results.txt",
+        help="Text result file used by --query-usage.",
+    )
+    parser.add_argument(
+        "--usage-csv-file",
+        default="usage_results.csv",
+        help="CSV result file used by --query-usage.",
+    )
+    parser.add_argument(
+        "--usage-timeout",
+        type=int,
+        default=15,
+        help="Seconds to wait for each usage query result.",
+    )
+    parser.add_argument(
+        "--usage-delay",
+        type=float,
+        default=0.8,
+        help="Seconds to wait after clicking each usage query button before checking the result.",
+    )
+    parser.add_argument(
         "--donation-url",
         default=DEFAULT_DONATION_URL,
         help="Lottery page URL used by --donate-keys.",
@@ -1057,17 +1314,30 @@ def main():
         member_keys = []
         member_keys_path = None
         donation_keys, donation_keys_path = load_api_keys(args.donation_keys_file)
+        usage_keys = []
+        usage_keys_path = None
+    elif args.query_usage:
+        credentials = []
+        member_keys = []
+        member_keys_path = None
+        donation_keys = []
+        donation_keys_path = None
+        usage_keys, usage_keys_path = load_api_keys(args.usage_keys_file)
     elif args.add_member_keys:
         credentials = []
         member_keys, member_keys_path = load_api_keys(args.member_keys_file)
         donation_keys = []
         donation_keys_path = None
+        usage_keys = []
+        usage_keys_path = None
     else:
         credentials = collect_credentials(args)
         member_keys = []
         member_keys_path = None
         donation_keys = []
         donation_keys_path = None
+        usage_keys = []
+        usage_keys_path = None
 
     sync_playwright, _ = import_playwright()
 
@@ -1084,6 +1354,8 @@ def main():
 
         if args.donate_keys:
             target_url = args.donation_url
+        elif args.query_usage:
+            target_url = args.usage_url
         elif args.add_member_keys:
             target_url = args.backpack_url
         else:
@@ -1093,6 +1365,10 @@ def main():
             if args.donate_keys:
                 wait_for_key(
                     "Lottery page opened. Log in and confirm the page is ready, then press Enter here to start donating keys..."
+                )
+            elif args.query_usage:
+                wait_for_key(
+                    "Usage query page opened. Log in and confirm the page is ready, then press Enter here to start querying key usage..."
                 )
             elif args.add_member_keys:
                 wait_for_key(
@@ -1106,6 +1382,13 @@ def main():
         if args.donate_keys:
             print(f"Reading donation keys from: {donation_keys_path}")
             donate_keys(page, donation_keys, donation_keys_path, args)
+            input("Press Enter here to close the browser...")
+            context.close()
+            return
+
+        if args.query_usage:
+            print(f"Reading usage query keys from: {usage_keys_path}")
+            query_key_usage(page, usage_keys, usage_keys_path, args)
             input("Press Enter here to close the browser...")
             context.close()
             return
