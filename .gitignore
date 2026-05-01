@@ -16,4 +16,6 @@ activation_keys.csv
 api_keys.csv
 activation_keys.txt
 api_keys.txt
+donation_progress.json
+donation_results.csv
 *.log

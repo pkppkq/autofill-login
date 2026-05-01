@@ -1,6 +1,8 @@
 import argparse
 import csv
 import getpass
+import hashlib
+import json
 import re
 import sys
 import time
@@ -10,6 +12,7 @@ from pathlib import Path
 
 DEFAULT_URL = "https://juzixiaoguofan.replit.app/admin-panel/activate"
 DEFAULT_BACKPACK_URL = "https://juzixiaoguofan.replit.app/admin-panel/backpack"
+DEFAULT_DONATION_URL = "https://juzixiaoguofan.replit.app/admin-panel/lottery"
 SCRIPT_DIR = Path(__file__).resolve().parent
 API_KEY_PATTERN = re.compile(r"sk-jb-[A-Za-z0-9_-]{24,}")
 
@@ -231,6 +234,40 @@ def mask_api_key(api_key):
         return api_key
     body = api_key[len(prefix) :]
     return f"{prefix}{body[:4]}****{body[-4:]}"
+
+
+def key_fingerprint(api_key):
+    return hashlib.sha256(api_key.encode("utf-8")).hexdigest()[:16]
+
+
+def read_json_file(file_path):
+    path = resolve_output_path(file_path)
+    if not path.exists():
+        return {}, path
+
+    with path.open("r", encoding="utf-8") as handle:
+        return json.load(handle), path
+
+
+def write_json_file(file_path, data):
+    path = resolve_output_path(file_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as handle:
+        json.dump(data, handle, ensure_ascii=False, indent=2)
+        handle.write("\n")
+    return path
+
+
+def append_csv_row(file_path, header, row):
+    path = resolve_output_path(file_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    needs_header = not path.exists() or path.stat().st_size == 0
+    with path.open("a", newline="", encoding="utf-8") as handle:
+        writer = csv.writer(handle)
+        if needs_header:
+            writer.writerow(header)
+        writer.writerow(row)
+    return path
 
 
 def find_member_key_input(page, timeout_ms=2500):
@@ -468,6 +505,294 @@ def add_member_keys(page, api_keys, args):
                 break
 
 
+def find_donation_input(page, timeout_ms=2500):
+    candidates = [
+        lambda: page.get_by_placeholder(re.compile(r"(粘贴 Key|捐献|JB KEY|key)", re.I)),
+        lambda: page.locator("input[placeholder*='Key' i]"),
+        lambda: page.locator("input[placeholder*='key' i]"),
+        lambda: page.locator("input").last,
+    ]
+
+    last_error = None
+    for candidate in candidates:
+        try:
+            locator = candidate()
+            element = first_visible(locator)
+            if element is None:
+                continue
+            element.wait_for(state="visible", timeout=timeout_ms)
+            return element
+        except Exception as exc:
+            last_error = exc
+
+    message = "Could not find the donation key input."
+    if last_error:
+        message += f" Last error: {last_error}"
+    raise RuntimeError(message)
+
+
+def open_donation_dialog(page):
+    try:
+        return find_donation_input(page, timeout_ms=1000)
+    except RuntimeError:
+        pass
+
+    donate_entry_text = re.compile(r"(我要当圣人|圣人计划|捐献 Key|捐献Key)", re.I)
+    candidates = [
+        lambda: page.get_by_role("button", name=donate_entry_text),
+        lambda: page.locator("button").filter(has_text=donate_entry_text),
+        lambda: page.locator("[role='button']").filter(has_text=donate_entry_text),
+        lambda: page.get_by_text(donate_entry_text),
+    ]
+
+    for candidate in candidates:
+        try:
+            element = first_visible(candidate())
+            if element is None:
+                continue
+            element.scroll_into_view_if_needed(timeout=1500)
+            element.click(timeout=2500)
+            return find_donation_input(page, timeout_ms=5000)
+        except Exception:
+            continue
+
+    try:
+        if click_text_or_clickable_ancestor(page, ["我要当圣人", "圣人计划"]):
+            return find_donation_input(page, timeout_ms=5000)
+    except Exception:
+        pass
+
+    raise RuntimeError("Could not open donation dialog.")
+
+
+def click_donate_key_button(page, timeout_ms=2500):
+    button_text = re.compile(r"(捐献\s*Key|捐献Key|捐献)", re.I)
+    candidates = [
+        lambda: page.get_by_role("button", name=button_text),
+        lambda: page.locator("button").filter(has_text=button_text),
+        lambda: page.get_by_text(button_text),
+    ]
+
+    for candidate in candidates:
+        try:
+            element = first_visible(candidate())
+            if element is None:
+                continue
+            element.click(timeout=timeout_ms)
+            return True
+        except Exception:
+            continue
+
+    raise RuntimeError("Could not find the donate key button.")
+
+
+def wait_for_donation_result(page, timeout_seconds):
+    deadline = time.monotonic() + timeout_seconds
+
+    while time.monotonic() < deadline:
+        command = read_wait_command()
+        if command == "quit":
+            raise ActivationWaitCancelled("User requested exit while waiting for donation result.")
+        if command == "skip":
+            raise ActivationWaitSkipped("User requested skipping the current donation key.")
+
+        text = page_text(page)
+        if "捐献成功" in text:
+            return "success", "捐献成功"
+        if "Key 不存在" in text or "已被删除" in text or "无法捐献" in text:
+            return "invalid", "Key 不存在或已被删除，无法捐献"
+        if "失败" in text or "错误" in text:
+            return "failed", "页面显示失败或错误"
+
+        time.sleep(0.5)
+
+    raise RuntimeError("Timed out waiting for donation result.")
+
+
+def close_donation_success(page):
+    close_text = re.compile(r"(好的，去抽奖|去抽奖|好的|确定)", re.I)
+    candidates = [
+        lambda: page.get_by_role("button", name=close_text),
+        lambda: page.locator("button").filter(has_text=close_text),
+        lambda: page.get_by_text(close_text),
+    ]
+
+    for candidate in candidates:
+        try:
+            element = first_visible(candidate())
+            if element is None:
+                continue
+            element.click(timeout=2500)
+            return True
+        except Exception:
+            continue
+
+    return False
+
+
+def close_donation_dialog(page):
+    close_text = re.compile(r"(取消|关闭|close|cancel)", re.I)
+    candidates = [
+        lambda: page.get_by_role("button", name=close_text),
+        lambda: page.locator("button").filter(has_text=close_text),
+        lambda: page.get_by_text(close_text),
+    ]
+
+    for candidate in candidates:
+        try:
+            element = first_visible(candidate())
+            if element is None:
+                continue
+            element.click(timeout=1500)
+            return True
+        except Exception:
+            continue
+
+    return False
+
+
+def resolve_donation_start_index(args, key_count):
+    if args.donation_start_index is not None:
+        start_index = max(0, args.donation_start_index - 1)
+        return min(start_index, key_count), None, None
+
+    state, state_path = read_json_file(args.donation_state_file)
+    if args.donation_restart:
+        return 0, state, state_path
+
+    next_index = state.get("next_index", 0)
+    if not isinstance(next_index, int):
+        next_index = 0
+
+    return min(max(next_index, 0), key_count), state, state_path
+
+
+def save_donation_progress(args, keys_path, next_index, total_keys, status, result=None):
+    state = {
+        "updated_at": datetime.now().isoformat(timespec="seconds"),
+        "keys_file": str(keys_path),
+        "next_index": next_index,
+        "next_key_number": next_index + 1 if next_index < total_keys else None,
+        "total_keys_seen": total_keys,
+        "completed_all_seen_keys": next_index >= total_keys,
+        "status": status,
+    }
+    if result:
+        state["last_result"] = result
+    return write_json_file(args.donation_state_file, state)
+
+
+def append_donation_result(args, index, total_keys, api_key, status, detail):
+    return append_csv_row(
+        args.donation_results_file,
+        ["time", "key_number", "total_keys", "key_masked", "key_hash", "status", "detail"],
+        [
+            datetime.now().isoformat(timespec="seconds"),
+            index + 1,
+            total_keys,
+            mask_api_key(api_key),
+            key_fingerprint(api_key),
+            status,
+            detail,
+        ],
+    )
+
+
+def donate_keys(page, api_keys, keys_path, args):
+    total = len(api_keys)
+    start_index, _, state_path = resolve_donation_start_index(args, total)
+    if state_path is None:
+        state_path = resolve_output_path(args.donation_state_file)
+
+    if start_index >= total:
+        save_donation_progress(args, keys_path, total, total, "complete")
+        print(f"No pending donation keys. Progress already covers {total}/{total} key(s).")
+        print(f"Progress: {state_path}")
+        return
+
+    print(f"Loaded {total} donation key(s) from: {keys_path}")
+    print(f"Starting from key {start_index + 1}/{total}.")
+    print("During donation: press Q to quit, or S to skip the current key.")
+
+    for index in range(start_index, total):
+        api_key = api_keys[index]
+        marker = mask_api_key(api_key)
+
+        command = read_wait_command()
+        if command == "quit":
+            save_donation_progress(args, keys_path, index, total, "stopped")
+            print("User requested exit before donating the next key.")
+            break
+        if command == "skip":
+            append_donation_result(args, index, total, api_key, "skipped", "user skipped before donation")
+            save_donation_progress(args, keys_path, index + 1, total, "running")
+            print(f"Skipped: {marker}")
+            continue
+
+        print(f"\nDonating key {index + 1}/{total}: {marker}")
+
+        try:
+            input_box = open_donation_dialog(page)
+            input_box.fill(api_key)
+            click_donate_key_button(page)
+            status, detail = wait_for_donation_result(page, args.donation_timeout)
+
+            if status == "success":
+                print(f"Donated: {marker}")
+                close_donation_success(page)
+            else:
+                print(f"Donation failed: {marker}. Reason: {detail}")
+                close_donation_dialog(page)
+
+            append_donation_result(args, index, total, api_key, status, detail)
+            save_donation_progress(
+                args,
+                keys_path,
+                index + 1,
+                total,
+                "running",
+                {
+                    "key_number": index + 1,
+                    "key_masked": marker,
+                    "key_hash": key_fingerprint(api_key),
+                    "result": status,
+                    "detail": detail,
+                },
+            )
+        except ActivationWaitSkipped as exc:
+            print(f"{exc} Moving to the next key.")
+            append_donation_result(args, index, total, api_key, "skipped", str(exc))
+            save_donation_progress(args, keys_path, index + 1, total, "running")
+        except ActivationWaitCancelled as exc:
+            print(exc)
+            save_donation_progress(args, keys_path, index, total, "stopped")
+            break
+        except Exception as exc:
+            print(f"Donation error: {marker}. Reason: {exc}")
+            print("Skipping this key and moving to the next one.")
+            append_donation_result(args, index, total, api_key, "error", str(exc))
+            save_donation_progress(
+                args,
+                keys_path,
+                index + 1,
+                total,
+                "running",
+                {
+                    "key_number": index + 1,
+                    "key_masked": marker,
+                    "key_hash": key_fingerprint(api_key),
+                    "result": "error",
+                    "detail": str(exc),
+                },
+            )
+
+        time.sleep(args.donation_delay)
+    else:
+        progress_path = save_donation_progress(args, keys_path, total, total, "complete")
+        print(f"Finished donating all currently loaded keys: {total}/{total}.")
+        print(f"Progress: {progress_path}")
+
+
 def open_target_page(context, url, keep_extra_tabs):
     page = context.pages[0] if context.pages else context.new_page()
     page.goto(url, wait_until="domcontentloaded")
@@ -596,6 +921,53 @@ def main():
         help="Open the backpack page and bulk add API keys as member keys.",
     )
     parser.add_argument(
+        "--donate-keys",
+        action="store_true",
+        help="Open the lottery page and donate stored API keys.",
+    )
+    parser.add_argument(
+        "--donation-url",
+        default=DEFAULT_DONATION_URL,
+        help="Lottery page URL used by --donate-keys.",
+    )
+    parser.add_argument(
+        "--donation-keys-file",
+        default="activation_keys.txt",
+        help="File containing sk-jb API keys for --donate-keys.",
+    )
+    parser.add_argument(
+        "--donation-state-file",
+        default="donation_progress.json",
+        help="JSON progress file used by --donate-keys.",
+    )
+    parser.add_argument(
+        "--donation-results-file",
+        default="donation_results.csv",
+        help="CSV result log used by --donate-keys.",
+    )
+    parser.add_argument(
+        "--donation-restart",
+        action="store_true",
+        help="Start donating from the first key instead of resuming saved progress.",
+    )
+    parser.add_argument(
+        "--donation-start-index",
+        type=int,
+        help="Start donating from this 1-based key number.",
+    )
+    parser.add_argument(
+        "--donation-timeout",
+        type=int,
+        default=20,
+        help="Seconds to wait for each donation result.",
+    )
+    parser.add_argument(
+        "--donation-delay",
+        type=float,
+        default=0.8,
+        help="Seconds to wait after each donation attempt.",
+    )
+    parser.add_argument(
         "--cycle-member-keys",
         action="store_true",
         help="Deprecated alias for --add-member-keys. It adds keys only and does not delete member keys.",
@@ -680,13 +1052,22 @@ def main():
     if args.cycle_member_keys:
         args.add_member_keys = True
 
-    if args.add_member_keys:
+    if args.donate_keys:
+        credentials = []
+        member_keys = []
+        member_keys_path = None
+        donation_keys, donation_keys_path = load_api_keys(args.donation_keys_file)
+    elif args.add_member_keys:
         credentials = []
         member_keys, member_keys_path = load_api_keys(args.member_keys_file)
+        donation_keys = []
+        donation_keys_path = None
     else:
         credentials = collect_credentials(args)
         member_keys = []
         member_keys_path = None
+        donation_keys = []
+        donation_keys_path = None
 
     sync_playwright, _ = import_playwright()
 
@@ -701,10 +1082,19 @@ def main():
             **launch_options,
         )
 
-        target_url = args.backpack_url if args.add_member_keys else args.url
+        if args.donate_keys:
+            target_url = args.donation_url
+        elif args.add_member_keys:
+            target_url = args.backpack_url
+        else:
+            target_url = args.url
         page = open_target_page(context, target_url, args.keep_extra_tabs)
         if not args.no_start_wait:
-            if args.add_member_keys:
+            if args.donate_keys:
+                wait_for_key(
+                    "Lottery page opened. Log in and confirm the page is ready, then press Enter here to start donating keys..."
+                )
+            elif args.add_member_keys:
                 wait_for_key(
                     "Backpack page opened. Log in and confirm the backpack page is ready, then press Enter here to start adding member keys..."
                 )
@@ -712,6 +1102,13 @@ def main():
                 wait_for_key(
                     "Browser opened. Log in or navigate to the target page first, then press Enter here to start..."
                 )
+
+        if args.donate_keys:
+            print(f"Reading donation keys from: {donation_keys_path}")
+            donate_keys(page, donation_keys, donation_keys_path, args)
+            input("Press Enter here to close the browser...")
+            context.close()
+            return
 
         if args.add_member_keys:
             print(f"Reading member keys from: {member_keys_path}")

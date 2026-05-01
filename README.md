@@ -13,6 +13,7 @@
 - 可选：填写后自动点击提交、登录或激活按钮。
 - 可选：自动点击“开始激活”，等待操作日志出现密钥信息，保存密钥后自动继续下一个账号。
 - 可选：在“我的背包”页面批量把 `activation_keys.txt` 里的密钥加入成员列表。
+- 可选：在“橘子机”页面批量捐献 `activation_keys.txt` 里的密钥，并记录进度。
 - 使用持久化浏览器配置，方便复用已经登录的会话。
 
 ## 环境要求
@@ -146,6 +147,62 @@ py -3 .\autofill_login.py --add-member-keys --member-keys-file "H:\path\keys.txt
 
 默认情况下，打开背包页后一定会等待你按 Enter 才开始添加。只有显式加 `--no-start-wait` 时，才会打开页面后直接开始操作。
 
+## 批量捐献 Key
+
+如果要在“橘子机”页面批量捐献保存的 Key，使用：
+
+```powershell
+py -3 .\autofill_login.py --donate-keys
+```
+
+这个模式会：
+
+1. 打开 `https://juzixiaoguofan.replit.app/admin-panel/lottery`。
+2. 暂停等待，你先在浏览器里登录并确认页面可用。
+3. 你回到 PowerShell 按 Enter 后，脚本才开始操作页面。
+4. 点击“我要当圣人”。
+5. 从 `activation_keys.txt` 提取所有 `sk-jb-...`。
+6. 逐个填入“要捐献的 JB KEY”。
+7. 点击“捐献 Key”。
+8. 如果显示“捐献成功”，记录成功并继续下一个。
+9. 如果显示“Key 不存在或已被删除，无法捐献”，记录失败并自动跳过下一个。
+10. 如果等待超时或页面报错，也记录原因并自动跳过下一个。
+
+捐献时，PowerShell 可以直接按：
+
+- `Q`：退出脚本，并保存当前进度。
+- `S`：跳过当前 Key，保存进度后继续下一个。
+
+这些按键在等待捐献结果时也生效，不需要再按 Enter。
+
+默认会从上次停止的位置继续。进度保存在：
+
+```text
+H:\github\autofill-login\donation_progress.json
+```
+
+每个 Key 的结果会追加记录到：
+
+```text
+H:\github\autofill-login\donation_results.csv
+```
+
+如果所有当前 Key 都捐献完，进度会记录为当前文件长度。以后 `activation_keys.txt` 新增 Key 后，再运行 `--donate-keys` 会从新增的 Key 开始。
+
+如果要从第一个 Key 重新开始：
+
+```powershell
+py -3 .\autofill_login.py --donate-keys --donation-restart
+```
+
+如果要从指定序号开始，例如从第 20 个 Key 开始：
+
+```powershell
+py -3 .\autofill_login.py --donate-keys --donation-start-index 20
+```
+
+默认情况下，打开橘子机页面后一定会等待你按 Enter 才开始捐献。只有显式加 `--no-start-wait` 时，才会打开页面后直接开始操作。
+
 ## 密钥保存位置
 
 自动激活模式拿到密钥后，会自动新建并追加写入下面两个本地文件：
@@ -180,6 +237,15 @@ time,account,api_key,url
 --submit                  填写后自动点击提交、登录或激活按钮。
 --auto-activate           自动点击、等待激活日志、记录密钥并继续下一个账号。
 --add-member-keys         打开背包页，批量把密钥添加为成员 Key。
+--donate-keys             打开橘子机页，批量捐献保存的 Key。
+--donation-url URL        批量捐献模式使用的橘子机页面地址。
+--donation-keys-file FILE 批量捐献模式读取的密钥文件，默认 activation_keys.txt。
+--donation-state-file FILE 捐献进度 JSON 文件，默认 donation_progress.json。
+--donation-results-file FILE 捐献结果 CSV 文件，默认 donation_results.csv。
+--donation-restart        从第一个 Key 重新开始捐献。
+--donation-start-index N  从指定的 1-based Key 序号开始捐献。
+--donation-timeout SEC    每个 Key 等待捐献结果的秒数，默认 20。
+--donation-delay SEC      每次捐献尝试后的暂停秒数，默认 0.8。
 --cycle-member-keys       旧别名，等同于 --add-member-keys，不会删除成员 Key。
 --backpack-url URL        批量成员 Key 模式使用的背包页地址。
 --member-keys-file FILE   批量成员 Key 模式读取的密钥文件，默认 activation_keys.txt。
@@ -212,7 +278,7 @@ py -3 .\autofill_login.py --browser chromium
 ## 安全提醒
 
 - 不要把真实账号密码提交到 GitHub。
-- 不要把 `activation_keys.csv`、`activation_keys.txt` 或其他密钥文件提交到 GitHub。
+- 不要把 `activation_keys.csv`、`activation_keys.txt`、`donation_progress.json`、`donation_results.csv` 或其他密钥文件提交到 GitHub。
 - 建议只把账号密码粘贴到本地 PowerShell 提示符里。
 - 不建议使用 `--password` 参数传密码，因为命令历史可能会保存它。
 - 如果账号密码曾经出现在聊天记录、截图、日志或提交记录中，建议尽快修改密码或作废重建。
