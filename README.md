@@ -12,6 +12,7 @@
 - 填完当前账号后，等待你按 Enter 再继续下一个。
 - 可选：填写后自动点击提交、登录或激活按钮。
 - 可选：自动点击“开始激活”，等待操作日志出现密钥信息，保存密钥后自动继续下一个账号。
+- 可选：在“我的背包”页面批量把 `activation_keys.txt` 里的密钥加入成员列表。
 - 使用持久化浏览器配置，方便复用已经登录的会话。
 
 ## 环境要求
@@ -101,6 +102,49 @@ While waiting: press Q to quit, or S to skip this account.
 
 这两个按键不需要再按 Enter。
 
+## 批量管理成员 Key
+
+如果要在“我的背包”页面批量加入成员 Key，使用：
+
+```powershell
+py -3 .\autofill_login.py --add-member-keys
+```
+
+这个模式会：
+
+1. 打开 `https://juzixiaoguofan.replit.app/admin-panel/backpack`。
+2. 暂停等待，你先在浏览器里登录并确认已经回到背包页。
+3. 你回到 PowerShell 按 Enter 后，脚本才开始操作页面。
+4. 点击“管理成员”。
+5. 从 `activation_keys.txt` 提取所有 `sk-jb-...`。
+6. 逐个填入“输入要加入的 API Key”。
+7. 点击“添加”。
+
+如果要每添加一个 Key 后立刻点击它右侧的删除按钮，再切换下一个 Key，使用：
+
+```powershell
+py -3 .\autofill_login.py --cycle-member-keys
+```
+
+这个命令等同于：
+
+```powershell
+py -3 .\autofill_login.py --add-member-keys --delete-after-add
+```
+
+批量管理成员 Key 时，PowerShell 可以直接按：
+
+- `Q`：退出脚本。
+- `S`：跳过当前 Key。
+
+这些按键在等待添加结果或删除结果时也生效，不需要再按 Enter。
+
+默认读取脚本同目录下的 `activation_keys.txt`。也可以指定其他文件：
+
+```powershell
+py -3 .\autofill_login.py --add-member-keys --member-keys-file "H:\path\keys.txt"
+```
+
 ## 密钥保存位置
 
 自动激活模式拿到密钥后，会自动新建并追加写入下面两个本地文件：
@@ -134,6 +178,13 @@ time,account,api_key,url
 --password PASSWORD       单个密码。不推荐使用，命令历史可能会记录密码。
 --submit                  填写后自动点击提交、登录或激活按钮。
 --auto-activate           自动点击、等待激活日志、记录密钥并继续下一个账号。
+--add-member-keys         打开背包页，批量把密钥添加为成员 Key。
+--cycle-member-keys       打开背包页，逐个添加成员 Key，添加后删除，再继续下一个。
+--backpack-url URL        批量成员 Key 模式使用的背包页地址。
+--member-keys-file FILE   批量成员 Key 模式读取的密钥文件，默认 activation_keys.txt。
+--delete-after-add        每添加一个成员 Key 后立刻删除它。
+--member-key-timeout SEC  每个成员 Key 添加或删除的等待秒数，默认 15。
+--member-key-delay SEC    每个成员 Key 操作后的暂停秒数，默认 0.8。
 --keys-file FILE          自动激活模式下保存密钥的 CSV 文件，默认 activation_keys.csv。
 --keys-text-file FILE     自动激活模式下保存密钥的 TXT 文档，默认 activation_keys.txt。
 --no-keys-text            不生成额外的 TXT 文档，只保存 CSV。

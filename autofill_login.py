@@ -9,6 +9,7 @@ from pathlib import Path
 
 
 DEFAULT_URL = "https://juzixiaoguofan.replit.app/admin-panel/activate"
+DEFAULT_BACKPACK_URL = "https://juzixiaoguofan.replit.app/admin-panel/backpack"
 SCRIPT_DIR = Path(__file__).resolve().parent
 API_KEY_PATTERN = re.compile(r"sk-jb-[A-Za-z0-9_-]{24,}")
 
@@ -204,6 +205,240 @@ def append_activation_key(keys_file, keys_text_file, account, api_key, page_url)
     return output_path, text_path
 
 
+def load_api_keys(keys_file):
+    path = resolve_output_path(keys_file)
+    if not path.exists():
+        raise SystemExit(f"API key file does not exist: {path}")
+
+    text = path.read_text(encoding="utf-8")
+    keys = []
+    seen = set()
+    for key in API_KEY_PATTERN.findall(text):
+        if key in seen:
+            continue
+        keys.append(key)
+        seen.add(key)
+
+    if not keys:
+        raise SystemExit(f"No API keys found in: {path}")
+
+    return keys, path
+
+
+def mask_api_key(api_key):
+    prefix = "sk-jb-"
+    if not api_key.startswith(prefix) or len(api_key) < len(prefix) + 8:
+        return api_key
+    body = api_key[len(prefix) :]
+    return f"{prefix}{body[:4]}****{body[-4:]}"
+
+
+def find_member_key_input(page, timeout_ms=2500):
+    candidates = [
+        lambda: page.get_by_placeholder(re.compile(r"(输入要加入的 API Key|API Key|key)", re.I)),
+        lambda: page.locator("input[placeholder*='API' i]"),
+        lambda: page.locator("input[placeholder*='key' i]"),
+        lambda: page.locator("input").last,
+    ]
+
+    last_error = None
+    for candidate in candidates:
+        try:
+            locator = candidate()
+            element = first_visible(locator)
+            if element is None:
+                continue
+            element.wait_for(state="visible", timeout=timeout_ms)
+            return element
+        except Exception as exc:
+            last_error = exc
+
+    message = "Could not find the member API key input."
+    if last_error:
+        message += f" Last error: {last_error}"
+    raise RuntimeError(message)
+
+
+def open_member_manager(page):
+    try:
+        return find_member_key_input(page, timeout_ms=1000)
+    except RuntimeError:
+        pass
+
+    manage_member_text = re.compile(r"(管理成员|展开成员|成员管理)", re.I)
+    candidates = [
+        lambda: page.get_by_role("button", name=manage_member_text),
+        lambda: page.locator("button").filter(has_text=manage_member_text),
+        lambda: page.get_by_text(manage_member_text),
+    ]
+
+    for candidate in candidates:
+        try:
+            element = first_visible(candidate())
+            if element is None:
+                continue
+            element.click(timeout=2500)
+            return find_member_key_input(page, timeout_ms=5000)
+        except Exception:
+            continue
+
+    raise RuntimeError("Could not open member manager.")
+
+
+def click_add_member_key(page, timeout_ms=2500):
+    add_button_text = re.compile(r"(\+\s*添加|添加|add)", re.I)
+    candidates = [
+        lambda: page.get_by_role("button", name=add_button_text),
+        lambda: page.locator("button").filter(has_text=add_button_text),
+        lambda: page.get_by_text(add_button_text),
+    ]
+
+    for candidate in candidates:
+        try:
+            element = first_visible(candidate())
+            if element is None:
+                continue
+            element.click(timeout=timeout_ms)
+            return True
+        except Exception:
+            continue
+
+    raise RuntimeError("Could not find the add member button.")
+
+
+def wait_for_member_key(page, api_key, timeout_seconds):
+    deadline = time.monotonic() + timeout_seconds
+    marker = mask_api_key(api_key)
+
+    while time.monotonic() < deadline:
+        command = read_wait_command()
+        if command == "quit":
+            raise ActivationWaitCancelled("User requested exit while waiting for member key.")
+        if command == "skip":
+            raise ActivationWaitSkipped("User requested skipping the current member key.")
+
+        text = page_text(page)
+        if api_key in text or marker in text:
+            return marker
+        time.sleep(0.5)
+
+    raise RuntimeError(f"Timed out waiting for member key to appear: {marker}")
+
+
+def confirm_possible_dialog(page):
+    confirm_text = re.compile(r"(确认|确定|删除|继续|yes|ok|confirm|delete)", re.I)
+    candidates = [
+        lambda: page.get_by_role("button", name=confirm_text),
+        lambda: page.locator("button").filter(has_text=confirm_text),
+    ]
+
+    for candidate in candidates:
+        try:
+            element = first_visible(candidate())
+            if element is None:
+                continue
+            if element.is_visible():
+                element.click(timeout=1000)
+                return True
+        except Exception:
+            continue
+
+    return False
+
+
+def delete_member_key(page, api_key, timeout_seconds):
+    marker = wait_for_member_key(page, api_key, timeout_seconds)
+    deleted = page.evaluate(
+        """
+        (marker) => {
+            const visible = (el) => {
+                const style = window.getComputedStyle(el);
+                const rect = el.getBoundingClientRect();
+                return style.visibility !== "hidden" &&
+                    style.display !== "none" &&
+                    rect.width > 0 &&
+                    rect.height > 0;
+            };
+            const nodes = Array.from(document.querySelectorAll("body *"))
+                .filter((el) => visible(el) && (el.textContent || "").includes(marker))
+                .sort((a, b) => (a.textContent || "").length - (b.textContent || "").length);
+
+            for (const node of nodes) {
+                let current = node;
+                while (current && current !== document.body) {
+                    const controls = Array.from(
+                        current.querySelectorAll("button, [role='button']")
+                    ).filter(visible);
+                    if (controls.length) {
+                        controls[controls.length - 1].click();
+                        return true;
+                    }
+                    current = current.parentElement;
+                }
+            }
+
+            return false;
+        }
+        """,
+        marker,
+    )
+    if not deleted:
+        raise RuntimeError(f"Could not find delete control for member key: {marker}")
+
+    confirm_possible_dialog(page)
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        command = read_wait_command()
+        if command == "quit":
+            raise ActivationWaitCancelled("User requested exit while deleting member key.")
+        if command == "skip":
+            raise ActivationWaitSkipped("User requested skipping the current member key.")
+
+        if marker not in page_text(page):
+            return marker
+        time.sleep(0.5)
+
+    return marker
+
+
+def add_member_keys(page, api_keys, args):
+    input_box = open_member_manager(page)
+    total = len(api_keys)
+
+    print(f"Loaded {total} API key(s).")
+    print("During this mode: press Q to quit, or S to skip the current key.")
+
+    for index, api_key in enumerate(api_keys, start=1):
+        command = read_wait_command()
+        if command == "quit":
+            print("User requested exit before adding the next member key.")
+            break
+        if command == "skip":
+            print("Skipped one pending key.")
+            continue
+
+        marker = mask_api_key(api_key)
+        print(f"\nAdding member key {index}/{total}: {marker}")
+
+        try:
+            input_box.fill(api_key)
+            click_add_member_key(page)
+            appeared_marker = wait_for_member_key(page, api_key, args.member_key_timeout)
+            print(f"Added: {appeared_marker}")
+
+            if args.delete_after_add:
+                deleted_marker = delete_member_key(page, api_key, args.member_key_timeout)
+                print(f"Deleted: {deleted_marker}")
+        except ActivationWaitSkipped as exc:
+            print(f"{exc} Moving to the next key.")
+        except ActivationWaitCancelled as exc:
+            print(exc)
+            break
+
+        time.sleep(args.member_key_delay)
+        input_box = find_member_key_input(page, timeout_ms=5000)
+
+
 def open_target_page(context, url, keep_extra_tabs):
     page = context.pages[0] if context.pages else context.new_page()
     page.goto(url, wait_until="domcontentloaded")
@@ -327,6 +562,43 @@ def main():
         help="Click submit, wait for the activation log and new API key, save it, then continue automatically.",
     )
     parser.add_argument(
+        "--add-member-keys",
+        action="store_true",
+        help="Open the backpack page and bulk add API keys as member keys.",
+    )
+    parser.add_argument(
+        "--cycle-member-keys",
+        action="store_true",
+        help="Open the backpack page, add each member key, delete it, then continue to the next key.",
+    )
+    parser.add_argument(
+        "--backpack-url",
+        default=DEFAULT_BACKPACK_URL,
+        help="Backpack page URL used by --add-member-keys.",
+    )
+    parser.add_argument(
+        "--member-keys-file",
+        default="activation_keys.txt",
+        help="File containing sk-jb API keys for --add-member-keys.",
+    )
+    parser.add_argument(
+        "--delete-after-add",
+        action="store_true",
+        help="After each member key is added and visible, click its delete control before moving on.",
+    )
+    parser.add_argument(
+        "--member-key-timeout",
+        type=int,
+        default=15,
+        help="Seconds to wait for each member key add/delete result.",
+    )
+    parser.add_argument(
+        "--member-key-delay",
+        type=float,
+        default=0.8,
+        help="Seconds to wait after each member key operation.",
+    )
+    parser.add_argument(
         "--keys-file",
         default="activation_keys.csv",
         help="CSV file used by --auto-activate to save API keys. Relative paths are saved next to this script.",
@@ -376,7 +648,17 @@ def main():
     )
     args = parser.parse_args()
 
-    credentials = collect_credentials(args)
+    if args.cycle_member_keys:
+        args.add_member_keys = True
+        args.delete_after_add = True
+
+    if args.add_member_keys:
+        credentials = []
+        member_keys, member_keys_path = load_api_keys(args.member_keys_file)
+    else:
+        credentials = collect_credentials(args)
+        member_keys = []
+        member_keys_path = None
 
     sync_playwright, _ = import_playwright()
 
@@ -391,11 +673,19 @@ def main():
             **launch_options,
         )
 
-        page = open_target_page(context, args.url, args.keep_extra_tabs)
+        target_url = args.backpack_url if args.add_member_keys else args.url
+        page = open_target_page(context, target_url, args.keep_extra_tabs)
         if not args.no_start_wait:
             wait_for_key(
-                "Browser opened. Log in or navigate to the target page, then press Enter here to start filling..."
+                "Browser opened. Log in or navigate to the target page first, then press Enter here to start..."
             )
+
+        if args.add_member_keys:
+            print(f"Reading member keys from: {member_keys_path}")
+            add_member_keys(page, member_keys, args)
+            input("Press Enter here to close the browser...")
+            context.close()
+            return
 
         total = len(credentials)
         should_exit = False
