@@ -88,6 +88,19 @@ py -3 .\autofill_login.py --auto-activate
 
 `activation_keys.csv` 和 `activation_keys.txt` 已经加入 `.gitignore`，不会默认提交到 GitHub。
 
+等待日志和密钥时，PowerShell 会显示：
+
+```text
+While waiting: press Q to quit, or S to skip this account.
+```
+
+这时可以直接按：
+
+- `Q`：退出整个脚本，并关闭自动化浏览器。
+- `S`：跳过当前账号，重新打开目标页后继续处理下一个账号。
+
+这两个按键不需要再按 Enter。
+
 ## 密钥保存位置
 
 自动激活模式拿到密钥后，会自动新建并追加写入下面两个本地文件：

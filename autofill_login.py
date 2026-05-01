@@ -13,6 +13,14 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 API_KEY_PATTERN = re.compile(r"sk-jb-[A-Za-z0-9_-]{24,}")
 
 
+class ActivationWaitCancelled(Exception):
+    pass
+
+
+class ActivationWaitSkipped(Exception):
+    pass
+
+
 def import_playwright():
     try:
         from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
@@ -115,11 +123,39 @@ def find_activation_result(text, previous_keys):
     return None, None
 
 
+def read_wait_command():
+    if not (sys.platform.startswith("win") and sys.stdin.isatty()):
+        return None
+
+    import msvcrt
+
+    while msvcrt.kbhit():
+        key = msvcrt.getwch()
+        if key in ("\x00", "\xe0"):
+            if msvcrt.kbhit():
+                msvcrt.getwch()
+            continue
+
+        key = key.lower()
+        if key == "q":
+            return "quit"
+        if key == "s":
+            return "skip"
+
+    return None
+
+
 def wait_for_activation_result(page, previous_keys, timeout_seconds, poll_interval):
     deadline = time.monotonic() + timeout_seconds
     last_error = None
 
     while time.monotonic() < deadline:
+        command = read_wait_command()
+        if command == "quit":
+            raise ActivationWaitCancelled("User requested exit while waiting for activation.")
+        if command == "skip":
+            raise ActivationWaitSkipped("User requested skipping the current account.")
+
         try:
             text = page_text(page)
             key, log_excerpt = find_activation_result(text, previous_keys)
@@ -362,6 +398,7 @@ def main():
             )
 
         total = len(credentials)
+        should_exit = False
         for index, (account, password) in enumerate(credentials, start=1):
             print(f"\nFilling account {index}/{total}: {account}")
 
@@ -377,12 +414,24 @@ def main():
                 previous_keys = extract_api_keys(page_text(page))
                 click_submit(page)
                 print("Waiting for activation log and new API key...")
-                api_key, log_excerpt = wait_for_activation_result(
-                    page,
-                    previous_keys,
-                    args.activation_timeout,
-                    args.poll_interval,
-                )
+                print("While waiting: press Q to quit, or S to skip this account.")
+                try:
+                    api_key, log_excerpt = wait_for_activation_result(
+                        page,
+                        previous_keys,
+                        args.activation_timeout,
+                        args.poll_interval,
+                    )
+                except ActivationWaitSkipped as exc:
+                    print(f"{exc} Moving to the next account.")
+                    if index < total:
+                        page.goto(args.url, wait_until="domcontentloaded")
+                    continue
+                except ActivationWaitCancelled as exc:
+                    print(exc)
+                    should_exit = True
+                    break
+
                 csv_path, text_path = append_activation_key(
                     args.keys_file,
                     None if args.no_keys_text else args.keys_text_file,
@@ -407,7 +456,8 @@ def main():
                     "After this account is done and the page is ready, press Enter here to fill the next one..."
                 )
 
-        input("Press Enter here to close the browser...")
+        if not should_exit:
+            input("Press Enter here to close the browser...")
         context.close()
 
 
