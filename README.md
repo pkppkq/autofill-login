@@ -120,17 +120,15 @@ py -3 .\autofill_login.py --add-member-keys
 6. 逐个填入“输入要加入的 API Key”。
 7. 点击“添加”。
 
-如果要每添加一个 Key 后立刻点击它右侧的删除按钮，再切换下一个 Key，使用：
+如果你只是想快速批量跑一遍，也可以使用旧别名：
 
 ```powershell
 py -3 .\autofill_login.py --cycle-member-keys
 ```
 
-这个命令等同于：
+`--cycle-member-keys` 现在只是 `--add-member-keys` 的别名，只会添加 Key，不会删除成员列表里的 Key。
 
-```powershell
-py -3 .\autofill_login.py --add-member-keys --delete-after-add
-```
+出于安全考虑，脚本不会点击成员列表右侧的删除按钮。`--delete-after-add` 参数已经废弃，即使传入也会被忽略。
 
 批量管理成员 Key 时，PowerShell 可以直接按：
 
@@ -179,11 +177,11 @@ time,account,api_key,url
 --submit                  填写后自动点击提交、登录或激活按钮。
 --auto-activate           自动点击、等待激活日志、记录密钥并继续下一个账号。
 --add-member-keys         打开背包页，批量把密钥添加为成员 Key。
---cycle-member-keys       打开背包页，逐个添加成员 Key，添加后删除，再继续下一个。
+--cycle-member-keys       旧别名，等同于 --add-member-keys，不会删除成员 Key。
 --backpack-url URL        批量成员 Key 模式使用的背包页地址。
 --member-keys-file FILE   批量成员 Key 模式读取的密钥文件，默认 activation_keys.txt。
---delete-after-add        每添加一个成员 Key 后立刻删除它。
---member-key-timeout SEC  每个成员 Key 添加或删除的等待秒数，默认 15。
+--delete-after-add        已废弃并被忽略，不会删除成员 Key。
+--member-key-timeout SEC  每个成员 Key 添加结果的等待秒数，默认 15。
 --member-key-delay SEC    每个成员 Key 操作后的暂停秒数，默认 0.8。
 --keys-file FILE          自动激活模式下保存密钥的 CSV 文件，默认 activation_keys.csv。
 --keys-text-file FILE     自动激活模式下保存密钥的 TXT 文档，默认 activation_keys.txt。

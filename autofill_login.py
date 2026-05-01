@@ -325,88 +325,14 @@ def wait_for_member_key(page, api_key, timeout_seconds):
     raise RuntimeError(f"Timed out waiting for member key to appear: {marker}")
 
 
-def confirm_possible_dialog(page):
-    confirm_text = re.compile(r"(确认|确定|删除|继续|yes|ok|confirm|delete)", re.I)
-    candidates = [
-        lambda: page.get_by_role("button", name=confirm_text),
-        lambda: page.locator("button").filter(has_text=confirm_text),
-    ]
-
-    for candidate in candidates:
-        try:
-            element = first_visible(candidate())
-            if element is None:
-                continue
-            if element.is_visible():
-                element.click(timeout=1000)
-                return True
-        except Exception:
-            continue
-
-    return False
-
-
-def delete_member_key(page, api_key, timeout_seconds):
-    marker = wait_for_member_key(page, api_key, timeout_seconds)
-    deleted = page.evaluate(
-        """
-        (marker) => {
-            const visible = (el) => {
-                const style = window.getComputedStyle(el);
-                const rect = el.getBoundingClientRect();
-                return style.visibility !== "hidden" &&
-                    style.display !== "none" &&
-                    rect.width > 0 &&
-                    rect.height > 0;
-            };
-            const nodes = Array.from(document.querySelectorAll("body *"))
-                .filter((el) => visible(el) && (el.textContent || "").includes(marker))
-                .sort((a, b) => (a.textContent || "").length - (b.textContent || "").length);
-
-            for (const node of nodes) {
-                let current = node;
-                while (current && current !== document.body) {
-                    const controls = Array.from(
-                        current.querySelectorAll("button, [role='button']")
-                    ).filter(visible);
-                    if (controls.length) {
-                        controls[controls.length - 1].click();
-                        return true;
-                    }
-                    current = current.parentElement;
-                }
-            }
-
-            return false;
-        }
-        """,
-        marker,
-    )
-    if not deleted:
-        raise RuntimeError(f"Could not find delete control for member key: {marker}")
-
-    confirm_possible_dialog(page)
-    deadline = time.monotonic() + timeout_seconds
-    while time.monotonic() < deadline:
-        command = read_wait_command()
-        if command == "quit":
-            raise ActivationWaitCancelled("User requested exit while deleting member key.")
-        if command == "skip":
-            raise ActivationWaitSkipped("User requested skipping the current member key.")
-
-        if marker not in page_text(page):
-            return marker
-        time.sleep(0.5)
-
-    return marker
-
-
 def add_member_keys(page, api_keys, args):
     input_box = open_member_manager(page)
     total = len(api_keys)
 
     print(f"Loaded {total} API key(s).")
     print("During this mode: press Q to quit, or S to skip the current key.")
+    if args.delete_after_add:
+        print("Warning: --delete-after-add is disabled for safety. Member keys will not be deleted.")
 
     for index, api_key in enumerate(api_keys, start=1):
         command = read_wait_command()
@@ -425,10 +351,7 @@ def add_member_keys(page, api_keys, args):
             click_add_member_key(page)
             appeared_marker = wait_for_member_key(page, api_key, args.member_key_timeout)
             print(f"Added: {appeared_marker}")
-
-            if args.delete_after_add:
-                deleted_marker = delete_member_key(page, api_key, args.member_key_timeout)
-                print(f"Deleted: {deleted_marker}")
+            input_box.fill("")
         except ActivationWaitSkipped as exc:
             print(f"{exc} Moving to the next key.")
         except ActivationWaitCancelled as exc:
@@ -569,7 +492,7 @@ def main():
     parser.add_argument(
         "--cycle-member-keys",
         action="store_true",
-        help="Open the backpack page, add each member key, delete it, then continue to the next key.",
+        help="Deprecated alias for --add-member-keys. It adds keys only and does not delete member keys.",
     )
     parser.add_argument(
         "--backpack-url",
@@ -584,13 +507,13 @@ def main():
     parser.add_argument(
         "--delete-after-add",
         action="store_true",
-        help="After each member key is added and visible, click its delete control before moving on.",
+        help="Deprecated and ignored for safety. Member keys are never deleted by this script.",
     )
     parser.add_argument(
         "--member-key-timeout",
         type=int,
         default=15,
-        help="Seconds to wait for each member key add/delete result.",
+        help="Seconds to wait for each member key add result.",
     )
     parser.add_argument(
         "--member-key-delay",
@@ -650,7 +573,6 @@ def main():
 
     if args.cycle_member_keys:
         args.add_member_keys = True
-        args.delete_after_add = True
 
     if args.add_member_keys:
         credentials = []
