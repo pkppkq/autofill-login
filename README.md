@@ -119,6 +119,7 @@ py -3 .\autofill_login.py --add-member-keys
 5. 从 `activation_keys.txt` 提取所有 `sk-jb-...`。
 6. 逐个填入“输入要加入的 API Key”。
 7. 点击“添加”。
+8. 如果某个 Key 添加失败或等待超时，会打印失败原因并自动跳过，继续下一个 Key。
 
 如果你只是想快速批量跑一遍，也可以使用旧别名：
 
@@ -135,13 +136,15 @@ py -3 .\autofill_login.py --cycle-member-keys
 - `Q`：退出脚本。
 - `S`：跳过当前 Key。
 
-这些按键在等待添加结果或删除结果时也生效，不需要再按 Enter。
+这些按键在等待添加结果时也生效，不需要再按 Enter。
 
 默认读取脚本同目录下的 `activation_keys.txt`。也可以指定其他文件：
 
 ```powershell
 py -3 .\autofill_login.py --add-member-keys --member-keys-file "H:\path\keys.txt"
 ```
+
+默认情况下，打开背包页后一定会等待你按 Enter 才开始添加。只有显式加 `--no-start-wait` 时，才会打开页面后直接开始操作。
 
 ## 密钥保存位置
 

@@ -445,9 +445,27 @@ def add_member_keys(page, api_keys, args):
         except ActivationWaitCancelled as exc:
             print(exc)
             break
+        except Exception as exc:
+            print(f"Failed: {marker}. Reason: {exc}")
+            print("Skipping this key and moving to the next one.")
+            try:
+                input_box = find_member_key_input(page, timeout_ms=1000)
+                input_box.fill("")
+            except Exception:
+                pass
 
         time.sleep(args.member_key_delay)
-        input_box = find_member_key_input(page, timeout_ms=5000)
+        try:
+            input_box = find_member_key_input(page, timeout_ms=5000)
+        except Exception as exc:
+            print(f"Could not refresh member key input after {marker}. Reason: {exc}")
+            print("Trying to reopen member manager before the next key.")
+            try:
+                input_box = open_member_manager(page)
+            except Exception as reopen_exc:
+                print(f"Could not reopen member manager. Reason: {reopen_exc}")
+                print("Stopping member key mode.")
+                break
 
 
 def open_target_page(context, url, keep_extra_tabs):
@@ -686,9 +704,14 @@ def main():
         target_url = args.backpack_url if args.add_member_keys else args.url
         page = open_target_page(context, target_url, args.keep_extra_tabs)
         if not args.no_start_wait:
-            wait_for_key(
-                "Browser opened. Log in or navigate to the target page first, then press Enter here to start..."
-            )
+            if args.add_member_keys:
+                wait_for_key(
+                    "Backpack page opened. Log in and confirm the backpack page is ready, then press Enter here to start adding member keys..."
+                )
+            else:
+                wait_for_key(
+                    "Browser opened. Log in or navigate to the target page first, then press Enter here to start..."
+                )
 
         if args.add_member_keys:
             print(f"Reading member keys from: {member_keys_path}")
