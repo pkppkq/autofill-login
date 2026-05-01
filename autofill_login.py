@@ -259,16 +259,97 @@ def find_member_key_input(page, timeout_ms=2500):
     raise RuntimeError(message)
 
 
+def click_text_or_clickable_ancestor(page, texts):
+    return page.evaluate(
+        """
+        (texts) => {
+            const visible = (el) => {
+                const style = window.getComputedStyle(el);
+                const rect = el.getBoundingClientRect();
+                return style.visibility !== "hidden" &&
+                    style.display !== "none" &&
+                    rect.width > 0 &&
+                    rect.height > 0;
+            };
+            const textOf = (el) => (el.innerText || el.textContent || "").trim();
+            const matches = (el) => texts.some((text) => textOf(el).includes(text));
+            const nodes = Array.from(document.querySelectorAll("button, [role='button'], a, div, span, p"))
+                .filter((el) => visible(el) && matches(el))
+                .sort((a, b) => textOf(a).length - textOf(b).length);
+
+            for (const node of nodes) {
+                let current = node;
+                while (current && current !== document.body) {
+                    if (visible(current)) {
+                        const style = window.getComputedStyle(current);
+                        const role = current.getAttribute("role");
+                        const tag = current.tagName.toLowerCase();
+                        if (
+                            tag === "button" ||
+                            tag === "a" ||
+                            role === "button" ||
+                            style.cursor === "pointer" ||
+                            typeof current.onclick === "function"
+                        ) {
+                            current.scrollIntoView({ block: "center", inline: "center" });
+                            current.click();
+                            return true;
+                        }
+                    }
+                    current = current.parentElement;
+                }
+
+                node.scrollIntoView({ block: "center", inline: "center" });
+                node.click();
+                return true;
+            }
+
+            return false;
+        }
+        """,
+        texts,
+    )
+
+
+def member_manager_debug_state(page):
+    try:
+        text = page_text(page)
+    except Exception as exc:
+        return f"Could not read page text: {exc}"
+
+    checks = [
+        ("管理成员", "管理成员" in text),
+        ("收起成员", "收起成员" in text),
+        ("输入要加入", "输入要加入" in text),
+        ("API Key", "API Key" in text),
+    ]
+    return ", ".join(f"{label}={'yes' if found else 'no'}" for label, found in checks)
+
+
 def open_member_manager(page):
+    try:
+        page.wait_for_load_state("domcontentloaded", timeout=5000)
+    except Exception:
+        pass
+
     try:
         return find_member_key_input(page, timeout_ms=1000)
     except RuntimeError:
         pass
 
+    for text in ("我的宝可梦球", "我的背包", "key1"):
+        try:
+            target = page.get_by_text(text).first
+            target.scroll_into_view_if_needed(timeout=1500)
+            break
+        except Exception:
+            continue
+
     manage_member_text = re.compile(r"(管理成员|展开成员|成员管理)", re.I)
     candidates = [
         lambda: page.get_by_role("button", name=manage_member_text),
         lambda: page.locator("button").filter(has_text=manage_member_text),
+        lambda: page.locator("[role='button']").filter(has_text=manage_member_text),
         lambda: page.get_by_text(manage_member_text),
     ]
 
@@ -277,12 +358,19 @@ def open_member_manager(page):
             element = first_visible(candidate())
             if element is None:
                 continue
+            element.scroll_into_view_if_needed(timeout=1500)
             element.click(timeout=2500)
             return find_member_key_input(page, timeout_ms=5000)
         except Exception:
             continue
 
-    raise RuntimeError("Could not open member manager.")
+    try:
+        if click_text_or_clickable_ancestor(page, ["管理成员", "展开成员", "成员管理"]):
+            return find_member_key_input(page, timeout_ms=5000)
+    except Exception:
+        pass
+
+    raise RuntimeError(f"Could not open member manager. Page state: {member_manager_debug_state(page)}")
 
 
 def click_add_member_key(page, timeout_ms=2500):
