@@ -88,6 +88,31 @@ py -3 .\autofill_login.py --auto-activate
 
 `activation_keys.csv` 和 `activation_keys.txt` 已经加入 `.gitignore`，不会默认提交到 GitHub。
 
+## 密钥保存位置
+
+自动激活模式拿到密钥后，会自动新建并追加写入下面两个本地文件：
+
+```text
+H:\github\autofill-login\activation_keys.csv
+H:\github\autofill-login\activation_keys.txt
+```
+
+`activation_keys.txt` 适合直接打开查看，内容格式类似：
+
+```text
+[2026-05-01T23:10:00] account@example.com
+sk-jb-xxxxxxxxxxxxxxxxxxxxxxxx
+https://juzixiaoguofan.replit.app/admin-panel/activate
+```
+
+`activation_keys.csv` 适合用 Excel、WPS 或脚本继续处理，字段包含：
+
+```text
+time,account,api_key,url
+```
+
+如果从其他目录启动脚本，密钥文件仍然会保存到脚本所在目录，不会散落到当前 PowerShell 目录。
+
 ## 常用参数
 
 ```text
