@@ -154,6 +154,24 @@ def append_activation_key(keys_file, account, api_key, page_url):
         )
 
 
+def open_target_page(context, url, keep_extra_tabs):
+    page = context.pages[0] if context.pages else context.new_page()
+    page.goto(url, wait_until="domcontentloaded")
+
+    if keep_extra_tabs:
+        return page
+
+    for extra_page in list(context.pages):
+        if extra_page == page:
+            continue
+        try:
+            extra_page.close()
+        except Exception:
+            pass
+
+    return page
+
+
 def parse_credential_pair(text):
     if ":" not in text:
         return None
@@ -281,6 +299,11 @@ def main():
         help="Start filling immediately after the page opens instead of waiting for Enter.",
     )
     parser.add_argument(
+        "--keep-extra-tabs",
+        action="store_true",
+        help="Keep tabs restored by the persistent browser profile instead of closing them.",
+    )
+    parser.add_argument(
         "--profile-dir",
         default=str(Path.home() / ".autofill_login_profile"),
         help="Persistent browser profile directory. Useful when the page needs you to stay logged in.",
@@ -308,8 +331,7 @@ def main():
             **launch_options,
         )
 
-        page = context.pages[0] if context.pages else context.new_page()
-        page.goto(args.url, wait_until="domcontentloaded")
+        page = open_target_page(context, args.url, args.keep_extra_tabs)
         if not args.no_start_wait:
             wait_for_key(
                 "Browser opened. Log in or navigate to the target page, then press Enter here to start filling..."

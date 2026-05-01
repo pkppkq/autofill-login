@@ -100,6 +100,7 @@ py -3 .\autofill_login.py --auto-activate
 --activation-timeout SEC  每个账号等待激活日志和密钥的最长秒数，默认 2100。
 --poll-interval SEC       自动激活模式下检查页面的间隔秒数，默认 2。
 --no-start-wait           打开页面后不等待 Enter，直接开始填写。
+--keep-extra-tabs         保留浏览器配置自动恢复出来的其他标签页。
 --profile-dir DIR         浏览器用户数据目录。
 --browser BROWSER         浏览器类型：chromium、msedge 或 chrome。
 ```
