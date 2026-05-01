@@ -276,6 +276,11 @@ def main():
         help="Seconds between page checks in --auto-activate mode.",
     )
     parser.add_argument(
+        "--no-start-wait",
+        action="store_true",
+        help="Start filling immediately after the page opens instead of waiting for Enter.",
+    )
+    parser.add_argument(
         "--profile-dir",
         default=str(Path.home() / ".autofill_login_profile"),
         help="Persistent browser profile directory. Useful when the page needs you to stay logged in.",
@@ -305,6 +310,10 @@ def main():
 
         page = context.pages[0] if context.pages else context.new_page()
         page.goto(args.url, wait_until="domcontentloaded")
+        if not args.no_start_wait:
+            wait_for_key(
+                "Browser opened. Log in or navigate to the target page, then press Enter here to start filling..."
+            )
 
         total = len(credentials)
         for index, (account, password) in enumerate(credentials, start=1):

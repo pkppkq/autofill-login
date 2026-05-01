@@ -53,6 +53,8 @@ account3@example.com:password3
 
 脚本会先填写第一个账号。你在网页中处理完当前账号后，回到 PowerShell 按 Enter，脚本才会继续填写下一个。
 
+浏览器打开目标页面后，脚本会先暂停。你可以先在浏览器里登录并回到激活页，然后回到 PowerShell 按 Enter，脚本才会开始填写账号。
+
 ## 运行模式
 
 默认模式只负责填写账号密码，不会自动点击按钮：
@@ -97,6 +99,7 @@ py -3 .\autofill_login.py --auto-activate
 --keys-file FILE          自动激活模式下保存密钥的 CSV 文件，默认 activation_keys.csv。
 --activation-timeout SEC  每个账号等待激活日志和密钥的最长秒数，默认 2100。
 --poll-interval SEC       自动激活模式下检查页面的间隔秒数，默认 2。
+--no-start-wait           打开页面后不等待 Enter，直接开始填写。
 --profile-dir DIR         浏览器用户数据目录。
 --browser BROWSER         浏览器类型：chromium、msedge 或 chrome。
 ```
