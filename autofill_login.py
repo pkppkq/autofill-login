@@ -14,6 +14,7 @@ DEFAULT_URL = "https://juzixiaoguofan.replit.app/admin-panel/activate"
 DEFAULT_BACKPACK_URL = "https://juzixiaoguofan.replit.app/admin-panel/backpack"
 DEFAULT_DONATION_URL = "https://juzixiaoguofan.replit.app/admin-panel/lottery"
 DEFAULT_USAGE_URL = "https://juzixiaoguofan.replit.app/admin-panel/my-key"
+DEFAULT_CHECKIN_URL = "https://juzixiaoguofan.xyz/admin-panel/personal-center"
 SCRIPT_DIR = Path(__file__).resolve().parent
 API_KEY_PATTERN = re.compile(r"sk-jb-[A-Za-z0-9_-]{24,}")
 
@@ -1013,6 +1014,225 @@ def query_key_usage(page, api_keys, keys_path, args):
     print("Usage query mode finished.")
 
 
+def parse_checkin_numbers(text):
+    def labeled_number(label):
+        match = re.search(rf"{label}\s*\n?\s*(\d+)", text)
+        return int(match.group(1)) if match else ""
+
+    daily_match = re.search(r"今日全站剩余\s*(\d+)\s*/\s*(\d+)", text)
+    daily_remaining = int(daily_match.group(1)) if daily_match else ""
+    daily_limit = int(daily_match.group(2)) if daily_match else ""
+
+    return {
+        "total_quota": labeled_number("总额度"),
+        "used_quota": labeled_number("已使用"),
+        "daily_remaining": daily_remaining,
+        "daily_limit": daily_limit,
+    }
+
+
+def append_checkin_result(args, result, page_url):
+    saved_at = datetime.now().isoformat(timespec="seconds")
+    numbers = result.get("numbers", {})
+    text_path = resolve_output_path(args.checkin_log_file)
+    text_path.parent.mkdir(parents=True, exist_ok=True)
+
+    with text_path.open("a", encoding="utf-8") as handle:
+        handle.write(f"[{saved_at}]\n")
+        handle.write(f"status: {result['status']}\n")
+        handle.write(f"detail: {result['detail']}\n")
+        handle.write(f"total_quota: {numbers.get('total_quota', '')}\n")
+        handle.write(f"used_quota: {numbers.get('used_quota', '')}\n")
+        handle.write(f"daily_remaining: {numbers.get('daily_remaining', '')}\n")
+        handle.write(f"daily_limit: {numbers.get('daily_limit', '')}\n")
+        handle.write(f"url: {page_url}\n\n")
+
+    csv_path = append_csv_row(
+        args.checkin_csv_file,
+        [
+            "time",
+            "status",
+            "detail",
+            "total_quota",
+            "used_quota",
+            "daily_remaining",
+            "daily_limit",
+            "url",
+        ],
+        [
+            saved_at,
+            result["status"],
+            result["detail"],
+            numbers.get("total_quota", ""),
+            numbers.get("used_quota", ""),
+            numbers.get("daily_remaining", ""),
+            numbers.get("daily_limit", ""),
+            page_url,
+        ],
+    )
+
+    return text_path, csv_path
+
+
+def classify_checkin_text(text):
+    numbers = parse_checkin_numbers(text)
+
+    if "签到成功" in text or "领取成功" in text or "发放成功" in text:
+        return {
+            "status": "success",
+            "detail": "签到成功",
+            "numbers": numbers,
+        }
+    if "今日已签到" in text or "已签到" in text:
+        return {
+            "status": "already_done",
+            "detail": "今日已签到",
+            "numbers": numbers,
+        }
+    if "今日全站额度已发完" in text or "全站额度已发完" in text:
+        return {
+            "status": "unavailable",
+            "detail": "今日全站额度已发完",
+            "numbers": numbers,
+        }
+    if "请明天再来" in text:
+        return {
+            "status": "unavailable",
+            "detail": "请明天再来",
+            "numbers": numbers,
+        }
+    if "请先登录" in text or "未登录" in text or "登录" in text and "个人中心" not in text:
+        return {
+            "status": "not_logged_in",
+            "detail": "页面可能未登录",
+            "numbers": numbers,
+        }
+
+    return None
+
+
+def click_checkin_button(page, timeout_ms=2500):
+    button_names = re.compile(r"(签到|领取|领取额度|每日签到|今日签到)", re.I)
+    candidates = [
+        lambda: page.get_by_role("button", name=button_names),
+        lambda: page.locator("button").filter(has_text=button_names),
+        lambda: page.locator("[role='button']").filter(has_text=button_names),
+        lambda: page.get_by_text(button_names),
+    ]
+
+    for candidate in candidates:
+        try:
+            element = first_visible(candidate())
+            if element is None:
+                continue
+            element.scroll_into_view_if_needed(timeout=1500)
+            if hasattr(element, "is_enabled") and not element.is_enabled(timeout=1000):
+                continue
+            element.click(timeout=timeout_ms)
+            return True
+        except Exception:
+            continue
+
+    try:
+        return click_text_or_clickable_ancestor(page, ["签到", "领取额度", "领取"])
+    except Exception:
+        return False
+
+
+def wait_for_checkin_result(page, timeout_seconds, previous_text=None):
+    deadline = time.monotonic() + timeout_seconds
+    started_at = time.monotonic()
+    last_text = previous_text or ""
+
+    while time.monotonic() < deadline:
+        command = read_wait_command()
+        if command == "quit":
+            raise ActivationWaitCancelled("User requested exit while waiting for check-in result.")
+
+        text = page_text(page)
+        result = classify_checkin_text(text)
+        if result:
+            if previous_text is not None and text == previous_text and time.monotonic() - started_at < 2:
+                time.sleep(0.5)
+                continue
+            return result
+
+        if text != last_text and ("每日签到" in text or "个人中心" in text):
+            last_text = text
+
+        time.sleep(0.5)
+
+    numbers = parse_checkin_numbers(last_text or page_text(page))
+    return {
+        "status": "unknown",
+        "detail": "等待签到结果超时",
+        "numbers": numbers,
+    }
+
+
+def run_daily_checkin(page, args):
+    try:
+        page.wait_for_load_state("domcontentloaded", timeout=5000)
+    except Exception:
+        pass
+
+    time.sleep(args.checkin_delay)
+    text = page_text(page)
+    initial_result = classify_checkin_text(text)
+    if initial_result and initial_result["status"] in {"unavailable", "already_done"}:
+        text_path, csv_path = append_checkin_result(args, initial_result, page.url)
+        print(f"Daily check-in status: {initial_result['detail']}")
+        print(f"Text: {text_path}")
+        print(f"CSV: {csv_path}")
+        return initial_result
+
+    if "个人中心" not in text and "每日签到" not in text and "签到" not in text:
+        result = {
+            "status": "not_ready",
+            "detail": "没有检测到个人中心或每日签到区域，请确认登录状态和页面地址",
+            "numbers": parse_checkin_numbers(text),
+        }
+        text_path, csv_path = append_checkin_result(args, result, page.url)
+        print(result["detail"])
+        print(f"Text: {text_path}")
+        print(f"CSV: {csv_path}")
+        return result
+
+    print("Trying daily check-in...")
+    print("While waiting: press Q to quit.")
+    if not click_checkin_button(page):
+        result = {
+            "status": "no_button",
+            "detail": "没有找到可点击的签到按钮",
+            "numbers": parse_checkin_numbers(text),
+        }
+        text_path, csv_path = append_checkin_result(args, result, page.url)
+        print(result["detail"])
+        print(f"Text: {text_path}")
+        print(f"CSV: {csv_path}")
+        return result
+
+    try:
+        result = wait_for_checkin_result(page, args.checkin_timeout, text)
+    except ActivationWaitCancelled as exc:
+        result = {
+            "status": "stopped",
+            "detail": str(exc),
+            "numbers": parse_checkin_numbers(page_text(page)),
+        }
+
+    text_path, csv_path = append_checkin_result(args, result, page.url)
+    print(f"Daily check-in status: {result['status']} - {result['detail']}")
+    print(f"Text: {text_path}")
+    print(f"CSV: {csv_path}")
+    return result
+
+
+def wait_before_close(args):
+    if not args.no_close_wait:
+        input("Press Enter here to close the browser...")
+
+
 def open_target_page(context, url, keep_extra_tabs):
     page = context.pages[0] if context.pages else context.new_page()
     page.goto(url, wait_until="domcontentloaded")
@@ -1149,6 +1369,38 @@ def main():
         "--query-usage",
         action="store_true",
         help="Open the usage page and query stored API key capacity/usage.",
+    )
+    parser.add_argument(
+        "--check-in",
+        action="store_true",
+        help="Open the personal center page and run daily check-in.",
+    )
+    parser.add_argument(
+        "--checkin-url",
+        default=DEFAULT_CHECKIN_URL,
+        help="Personal center page URL used by --check-in.",
+    )
+    parser.add_argument(
+        "--checkin-log-file",
+        default="checkin_log.txt",
+        help="Text result log used by --check-in.",
+    )
+    parser.add_argument(
+        "--checkin-csv-file",
+        default="checkin_log.csv",
+        help="CSV result log used by --check-in.",
+    )
+    parser.add_argument(
+        "--checkin-timeout",
+        type=int,
+        default=20,
+        help="Seconds to wait for daily check-in result.",
+    )
+    parser.add_argument(
+        "--checkin-delay",
+        type=float,
+        default=1.0,
+        help="Seconds to wait after opening the personal center page before checking status.",
     )
     parser.add_argument(
         "--usage-url",
@@ -1289,6 +1541,11 @@ def main():
         help="Start filling immediately after the page opens instead of waiting for Enter.",
     )
     parser.add_argument(
+        "--no-close-wait",
+        action="store_true",
+        help="Close the browser automatically when the selected mode finishes.",
+    )
+    parser.add_argument(
         "--keep-extra-tabs",
         action="store_true",
         help="Keep tabs restored by the persistent browser profile instead of closing them.",
@@ -1314,6 +1571,14 @@ def main():
         member_keys = []
         member_keys_path = None
         donation_keys, donation_keys_path = load_api_keys(args.donation_keys_file)
+        usage_keys = []
+        usage_keys_path = None
+    elif args.check_in:
+        credentials = []
+        member_keys = []
+        member_keys_path = None
+        donation_keys = []
+        donation_keys_path = None
         usage_keys = []
         usage_keys_path = None
     elif args.query_usage:
@@ -1354,6 +1619,8 @@ def main():
 
         if args.donate_keys:
             target_url = args.donation_url
+        elif args.check_in:
+            target_url = args.checkin_url
         elif args.query_usage:
             target_url = args.usage_url
         elif args.add_member_keys:
@@ -1365,6 +1632,10 @@ def main():
             if args.donate_keys:
                 wait_for_key(
                     "Lottery page opened. Log in and confirm the page is ready, then press Enter here to start donating keys..."
+                )
+            elif args.check_in:
+                wait_for_key(
+                    "Personal center opened. Log in and confirm the page is ready, then press Enter here to run daily check-in..."
                 )
             elif args.query_usage:
                 wait_for_key(
@@ -1382,21 +1653,27 @@ def main():
         if args.donate_keys:
             print(f"Reading donation keys from: {donation_keys_path}")
             donate_keys(page, donation_keys, donation_keys_path, args)
-            input("Press Enter here to close the browser...")
+            wait_before_close(args)
+            context.close()
+            return
+
+        if args.check_in:
+            run_daily_checkin(page, args)
+            wait_before_close(args)
             context.close()
             return
 
         if args.query_usage:
             print(f"Reading usage query keys from: {usage_keys_path}")
             query_key_usage(page, usage_keys, usage_keys_path, args)
-            input("Press Enter here to close the browser...")
+            wait_before_close(args)
             context.close()
             return
 
         if args.add_member_keys:
             print(f"Reading member keys from: {member_keys_path}")
             add_member_keys(page, member_keys, args)
-            input("Press Enter here to close the browser...")
+            wait_before_close(args)
             context.close()
             return
 
@@ -1460,7 +1737,7 @@ def main():
                 )
 
         if not should_exit:
-            input("Press Enter here to close the browser...")
+            wait_before_close(args)
         context.close()
 
 

@@ -20,4 +20,6 @@ donation_progress.json
 donation_results.csv
 usage_results.txt
 usage_results.csv
+checkin_log.txt
+checkin_log.csv
 *.log

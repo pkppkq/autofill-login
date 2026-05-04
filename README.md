@@ -15,6 +15,7 @@
 - 可选：在“我的背包”页面批量把 `activation_keys.txt` 里的密钥加入成员列表。
 - 可选：在“橘子机”页面批量捐献 `activation_keys.txt` 里的密钥，并记录进度。
 - 可选：在“用量查询”页面批量查询 Key 容量和已使用次数，并写入结果文件。
+- 可选：在“个人中心”页面自动执行每日签到，并记录签到结果。
 - 使用持久化浏览器配置，方便复用已经登录的会话。
 
 ## 环境要求
@@ -250,6 +251,51 @@ py -3 .\autofill_login.py --query-usage --usage-keys-file "H:\path\keys.txt"
 
 默认情况下，打开用量查询页面后一定会等待你按 Enter 才开始查询。只有显式加 `--no-start-wait` 时，才会打开页面后直接开始操作。
 
+## 每日签到
+
+如果要手动运行一次每日签到，使用：
+
+```powershell
+py -3 .\autofill_login.py --check-in
+```
+
+这个模式会：
+
+1. 打开 `https://juzixiaoguofan.xyz/admin-panel/personal-center`。
+2. 暂停等待，你先在浏览器里登录并确认已经在个人中心页面。
+3. 你回到 PowerShell 按 Enter 后，脚本才开始签到。
+4. 如果检测到“今日全站额度已发完”“今日已签到”这类状态，会直接记录结果，不会乱点。
+5. 如果可以签到，会点击签到按钮，等待结果并记录。
+
+签到结果会写入：
+
+```text
+H:\github\autofill-login\checkin_log.txt
+H:\github\autofill-login\checkin_log.csv
+```
+
+第一次建议先手动运行一次，确认浏览器里已经登录：
+
+```powershell
+py -3 .\autofill_login.py --check-in
+```
+
+之后要交给计划任务每天 0 点自动跑，可以使用项目里的脚本：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "H:\github\autofill-login\daily_checkin.ps1"
+```
+
+`daily_checkin.ps1` 会调用：
+
+```powershell
+py -3 .\autofill_login.py --check-in --no-start-wait --no-close-wait
+```
+
+也就是打开页面后不再等 Enter，执行完自动关闭浏览器。它会把本次运行输出追加到 `daily_checkin.log`。
+
+如果网站登录态失效，计划任务不会自动帮你登录。重新手动运行一次 `--check-in`，在浏览器里登录成功后按 Enter，即可刷新本地浏览器配置里的登录状态。
+
 ## 密钥保存位置
 
 自动激活模式拿到密钥后，会自动新建并追加写入下面两个本地文件：
@@ -286,6 +332,12 @@ time,account,api_key,url
 --add-member-keys         打开背包页，批量把密钥添加为成员 Key。
 --donate-keys             打开橘子机页，批量捐献保存的 Key。
 --query-usage             打开用量查询页，批量查询 Key 容量和已使用次数。
+--check-in                打开个人中心页，执行每日签到。
+--checkin-url URL         每日签到模式使用的个人中心页面地址。
+--checkin-log-file FILE   每日签到 TXT 结果文件，默认 checkin_log.txt。
+--checkin-csv-file FILE   每日签到 CSV 结果文件，默认 checkin_log.csv。
+--checkin-timeout SEC     等待签到结果的秒数，默认 20。
+--checkin-delay SEC       打开个人中心后读取状态前的暂停秒数，默认 1.0。
 --usage-url URL           批量用量查询模式使用的页面地址。
 --usage-keys-file FILE    批量用量查询模式读取的密钥文件，默认 activation_keys.txt。
 --usage-results-file FILE 用量查询 TXT 结果文件，默认 usage_results.txt。
@@ -312,6 +364,7 @@ time,account,api_key,url
 --activation-timeout SEC  每个账号等待激活日志和密钥的最长秒数，默认 2100。
 --poll-interval SEC       自动激活模式下检查页面的间隔秒数，默认 2。
 --no-start-wait           打开页面后不等待 Enter，直接开始填写。
+--no-close-wait           选定模式结束后自动关闭浏览器，不等待 Enter。
 --keep-extra-tabs         保留浏览器配置自动恢复出来的其他标签页。
 --profile-dir DIR         浏览器用户数据目录。
 --browser BROWSER         浏览器类型：chromium、msedge 或 chrome。
@@ -332,7 +385,7 @@ py -3 .\autofill_login.py --browser chromium
 ## 安全提醒
 
 - 不要把真实账号密码提交到 GitHub。
-- 不要把 `activation_keys.csv`、`activation_keys.txt`、`donation_progress.json`、`donation_results.csv`、`usage_results.txt`、`usage_results.csv` 或其他密钥文件提交到 GitHub。
+- 不要把 `activation_keys.csv`、`activation_keys.txt`、`donation_progress.json`、`donation_results.csv`、`usage_results.txt`、`usage_results.csv`、`checkin_log.txt`、`checkin_log.csv` 或其他密钥文件提交到 GitHub。
 - 建议只把账号密码粘贴到本地 PowerShell 提示符里。
 - 不建议使用 `--password` 参数传密码，因为命令历史可能会保存它。
 - 如果账号密码曾经出现在聊天记录、截图、日志或提交记录中，建议尽快修改密码或作废重建。
